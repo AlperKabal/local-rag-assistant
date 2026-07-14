@@ -1,5 +1,57 @@
+import os
+import sqlite3
 import math
+import json
 from foundry_local_sdk import Configuration, FoundryLocalManager
+
+connection = sqlite3.connect('rag_database.db')
+cursor = connection.cursor()
+with connection: 
+    cursor.execute("""CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, source_name TEXT, text_chunk TEXT, embedding TEXT)""")
+print("Connected to the database!")
+
+def load_documents(folder_path = "docs"):
+    
+    documents = []
+    if not os.path.exists(folder_path):
+        print(f"Error: The folder '{folder_path}' does not exist! Please create it.")
+        return documents
+  
+    for file_path in os.listdir(folder_path):
+        filename = os.path.join(folder_path, file_path)
+        if os.path.isfile(filename):
+            try:
+                with open(filename, "r", encoding="utf-8") as file:
+                    content = file.read()
+                    documents.append({"source": file_path, "text": content})
+            except Exception as e: 
+                print(f"Skipping {filename}, Reason: {e}")
+    return documents
+            
+       
+def document_chunks(documents):
+    chunks = []
+    for doc in documents:
+        source = doc["source"]
+        raw_text:str = doc["text"]
+        paragraphs = raw_text.split("\n\n")
+        stripped_paragraphs = [ p.strip() for p in paragraphs if p.strip()]
+        chunks.extend([{"source": source, "text": text} for text in stripped_paragraphs])
+    return chunks
+
+def save_chunks(chunks_with_embeddings):
+    with connection:
+        for chunk in chunks_with_embeddings:
+            vector_string = json.dumps(chunk["embedding"])
+            cursor.execute("""INSERT INTO chunks (source_name, text_chunk, embedding) VALUES (?,?,?)""", (chunk["source"], chunk["text"], vector_string))
+
+
+def load_chunks():
+    with connection:
+        all_rows = cursor.execute("""SELECT source_name, text_chunk, embedding FROM chunks""").fetchall()
+    return [{"source": r[0], "text": r[1], "embedding": json.loads(r[2])} for r in all_rows]
+
+
 
 # Knowledge base — each string represents a document
 documents = [
@@ -87,13 +139,15 @@ def main():
         context = "\n".join(f"- {documents[i]}" for i, _ in results)
 
         # Build the prompt with retrieved context
+        # Build the prompt with retrieved context
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "Answer the user's question using only the provided context. "
-                    "If the context doesn't contain enough information, say so.\n\n"
-                    f"Context:\n{context}"
+                    "You are a strict technical support assistant. "
+                    "Answer the user's question using ONLY the facts provided below. "
+                    "If the answer cannot be found in the text below, or if the user is greeting you/asking off-topic questions, reply exactly with: 'I am sorry, but I can only answer questions about Foundry Local features based on my documentation.'\n\n"
+                    f"Facts:\n{context}"
                 ),
             },
             {"role": "user", "content": query},
@@ -102,14 +156,16 @@ def main():
         # Stream the response
         print("Answer: ", end="", flush=True)
         for chunk in chat_client.complete_streaming_chat(messages):
-            content = chunk.choices[0].delta.content
-            if content:
-                print(content, end="", flush=True)
+            # ADDED FIX: Check if choices actually exist before reading them
+            if chunk.choices: 
+                content = chunk.choices[0].delta.content
+                if content:
+                    print(content, end="", flush=True)
         print("\n")
-
     # Clean up
     embedding_model.unload()
     chat_model.unload()
+    connection.close()
     print("Models unloaded. Done!")
 
 
