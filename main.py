@@ -10,6 +10,19 @@ with connection:
     cursor.execute("""CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, source_name TEXT, text_chunk TEXT, embedding TEXT)""")
 print("Connected to the database!")
 
+with connection:
+    cursor.execute("""CREATE TABLE IF NOT EXISTS cache(question TEXT PRIMARY KEY, answer TEXT)""")
+
+def get_cached_answer(question):
+    with connection:
+        row = cursor.execute("""SELECT answer FROM cache WHERE question = ?""", (question.lower().strip(),)).fetchone()
+        return row if row else None
+        
+def save_cached_answer(question, answer):
+    with connection:
+        cursor.execute("""INSERT OR REPLACE INTO cache (question, answer) VALUES (?,?)""",(question.lower().strip(), answer))
+
+
 def load_documents(folder_path = "docs"):
     
     documents = []
@@ -52,19 +65,6 @@ def load_chunks():
     return [{"source": r[0], "text": r[1], "embedding": json.loads(r[2])} for r in all_rows]
 
 
-
-# Knowledge base — each string represents a document
-documents = [
-    "Foundry Local runs AI models directly on your device without cloud connectivity.",
-    "The Foundry Local SDK supports Python, C#, JavaScript, and Rust.",
-    "Embedding models convert text into numerical vectors for similarity search.",
-    "Foundry Local uses ONNX Runtime for efficient model inference on CPUs and GPUs.",
-    "The model catalog provides pre-optimized models that you can download and run locally.",
-    "Retrieval-augmented generation grounds model responses in your own data.",
-    "Vector similarity search finds documents that are semantically close to a query.",
-    "Chat completions generate natural language responses from a prompt and context.",
-]
-
 def cosine_similarity(a, b):
     """Compute cosine similarity between two vectors."""
     dot = sum(x * y for x, y in zip(a, b))
@@ -98,11 +98,21 @@ def main():
     embedding_client = embedding_model.get_embedding_client()
 
     # Embed all documents in a single batch call
-    response = embedding_client.generate_embeddings(documents)
-    doc_embeddings = [item.embedding for item in response.data]
+    all_chunks = load_chunks()
+    if not all_chunks:
+        documents = load_documents("docs")
+        chunked_documents = document_chunks(documents)
+        all_text = [c["text"] for c in chunked_documents]
+        response = embedding_client.generate_embeddings(all_text)
+        for chunk, embed in zip(chunked_documents, response.data):
+            chunk["embedding"] = embed.embedding
+        save_chunks(chunked_documents)
+        all_chunks = load_chunks()
+    
+    doc_embeddings = [chunk["embedding"] for chunk in all_chunks]
     print(f"Indexed {len(doc_embeddings)} documents.")
     # Load the chat model
-    chat_model = manager.catalog.get_model("qwen2.5-0.5b")
+    chat_model = manager.catalog.get_model("phi-3.5-mini")
     chat_model.download(
         lambda p: print(f"\rDownloading chat model: {p:.1f}%", end="", flush=True)
     )
@@ -111,17 +121,6 @@ def main():
     chat_client = chat_model.get_chat_client()
 
     print("\nModels loaded. Ready for questions.")
-    print("\nThe knowledge base contains information about:")
-    print("  - Foundry Local features and architecture")
-    print("  - Supported programming languages")
-    print("  - Embedding models and vector search")
-    print("  - ONNX Runtime inference")
-    print("  - The model catalog")
-    print("  - RAG and chat completions")
-    print("\nExample questions:")
-    print('  "What programming languages does the SDK support?"')
-    print('  "How does Foundry Local run models?"')
-    print('  "What is retrieval-augmented generation?"')
     print('\nType "quit" to exit.\n')
 
     # Interactive query loop
@@ -129,16 +128,19 @@ def main():
         query = input("Question: ").strip()
         if not query or query.lower() == "quit":
             break
-
+        
+        cached_answer = get_cached_answer(query)
+        if cached_answer: 
+            print(f"Answer (cached): {cached_answer}\n")
+            continue
         # Embed the query
         query_response = embedding_client.generate_embedding(query)
         query_embedding = query_response.data[0].embedding
 
         # Retrieve the most relevant documents
-        results = find_relevant(query_embedding, doc_embeddings, top_k=2)
-        context = "\n".join(f"- {documents[i]}" for i, _ in results)
+        results = find_relevant(query_embedding, doc_embeddings, top_k=3)
+        context = "\n".join(f"- {all_chunks[i]['text']} (source: {all_chunks[i]['source']})" for i, _ in results)
 
-        # Build the prompt with retrieved context
         # Build the prompt with retrieved context
         messages = [
             {
@@ -155,13 +157,16 @@ def main():
 
         # Stream the response
         print("Answer: ", end="", flush=True)
+        full_answer = ""
         for chunk in chat_client.complete_streaming_chat(messages):
             # ADDED FIX: Check if choices actually exist before reading them
             if chunk.choices: 
                 content = chunk.choices[0].delta.content
                 if content:
                     print(content, end="", flush=True)
+                    full_answer += content
         print("\n")
+        save_cached_answer(query, full_answer)
     # Clean up
     embedding_model.unload()
     chat_model.unload()
