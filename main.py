@@ -5,22 +5,35 @@ import json
 from foundry_local_sdk import Configuration, FoundryLocalManager
 
 connection = sqlite3.connect('rag_database.db')
+
 cursor = connection.cursor()
 with connection: 
     cursor.execute("""CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, source_name TEXT, text_chunk TEXT, embedding TEXT)""")
 print("Connected to the database!")
 
 with connection:
-    cursor.execute("""CREATE TABLE IF NOT EXISTS cache(question TEXT PRIMARY KEY, answer TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS cache(question TEXT PRIMARY KEY, answer TEXT, embedding TEXT)""")
+print("Created the cache table")
 
-def get_cached_answer(question):
+
+def get_cached_answer(query_embedding, threshold = 0.92):
     with connection:
-        row = cursor.execute("""SELECT answer FROM cache WHERE question = ?""", (question.lower().strip(),)).fetchone()
-        return row if row else None
+        rows = cursor.execute("""SELECT question, answer, embedding FROM cache""").fetchall()
+    best_score = 0
+    best_answer = None
+    for _, cached_answer, cached_embedding_json in rows:
+        cached_embedding = json.loads(cached_embedding_json)
+        score = cosine_similarity(cached_embedding,query_embedding)
+        if score > best_score:
+            best_score = score
+            best_answer = cached_answer
+    if best_score > threshold:
+        return best_answer
+    return None 
         
-def save_cached_answer(question, answer):
+def save_cached_answer(question, answer, embedding):
     with connection:
-        cursor.execute("""INSERT OR REPLACE INTO cache (question, answer) VALUES (?,?)""",(question.lower().strip(), answer))
+        cursor.execute("""INSERT OR REPLACE INTO cache (question, answer, embedding) VALUES (?,?,?)""",(question.lower().strip(), answer, json.dumps(embedding)))
 
 
 def load_documents(folder_path = "docs"):
@@ -82,6 +95,49 @@ def find_relevant(query_embedding, doc_embeddings, top_k=2):
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores[:top_k]    
 
+def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunks):
+    # 1. Embed the query
+    query_response = embedding_client.generate_embedding(query)
+    query_embedding = query_response.data[0].embedding
+
+    # 2. Check the Semantic Cache
+    cached_answer = get_cached_answer(query_embedding, threshold=0.92)
+    if cached_answer: 
+        print(f"Answer (cached): {cached_answer}\n")
+        return # Exit the function early since we already answered!
+
+    # 3. Retrieve the most relevant documents
+    results = find_relevant(query_embedding, doc_embeddings, top_k=3)
+    context = "\n".join(f"- {all_chunks[i]['text']} (source: {all_chunks[i]['source']})" for i, _ in results)
+
+    # 4. Build the prompt
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a strict technical support assistant. "
+                "Answer the user's question using ONLY the facts provided below. "
+                "If the answer cannot be found in the text below, or if the user is greeting you/asking off-topic questions, reply exactly with: 'I am sorry, but I can only answer questions about Foundry Local features based on my documentation.'\n\n"
+                f"Facts:\n{context}"
+            ),
+        },
+        {"role": "user", "content": query},
+    ]
+
+    # 5. Stream the response
+    print("Answer: ", end="", flush=True)
+    full_answer = ""
+    for chunk in chat_client.complete_streaming_chat(messages):
+        if chunk.choices: 
+            content = chunk.choices[0].delta.content
+            if content:
+                print(content, end="", flush=True)
+                full_answer += content
+    print("\n")
+    
+    # 6. Save the new answer to the cache
+    save_cached_answer(query, full_answer, query_embedding)
+
 def main():
     # Initialize the SDK
     config = Configuration(app_name="foundry_local_rag")
@@ -128,45 +184,8 @@ def main():
         query = input("Question: ").strip()
         if not query or query.lower() == "quit":
             break
+        answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunks)
         
-        cached_answer = get_cached_answer(query)
-        if cached_answer: 
-            print(f"Answer (cached): {cached_answer}\n")
-            continue
-        # Embed the query
-        query_response = embedding_client.generate_embedding(query)
-        query_embedding = query_response.data[0].embedding
-
-        # Retrieve the most relevant documents
-        results = find_relevant(query_embedding, doc_embeddings, top_k=3)
-        context = "\n".join(f"- {all_chunks[i]['text']} (source: {all_chunks[i]['source']})" for i, _ in results)
-
-        # Build the prompt with retrieved context
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict technical support assistant. "
-                    "Answer the user's question using ONLY the facts provided below. "
-                    "If the answer cannot be found in the text below, or if the user is greeting you/asking off-topic questions, reply exactly with: 'I am sorry, but I can only answer questions about Foundry Local features based on my documentation.'\n\n"
-                    f"Facts:\n{context}"
-                ),
-            },
-            {"role": "user", "content": query},
-        ]
-
-        # Stream the response
-        print("Answer: ", end="", flush=True)
-        full_answer = ""
-        for chunk in chat_client.complete_streaming_chat(messages):
-            # ADDED FIX: Check if choices actually exist before reading them
-            if chunk.choices: 
-                content = chunk.choices[0].delta.content
-                if content:
-                    print(content, end="", flush=True)
-                    full_answer += content
-        print("\n")
-        save_cached_answer(query, full_answer)
     # Clean up
     embedding_model.unload()
     chat_model.unload()
