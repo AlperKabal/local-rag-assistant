@@ -1,0 +1,7 @@
+Microsoft Foundry Local is an end-to-end local AI solution that lets developers run large language models directly on a user's device instead of calling a cloud endpoint. It provides a lightweight runtime and SDK, along with a curated catalog of pre-optimized models that are small enough to distribute to end users.
+
+Because everything runs on-device, Foundry Local offers complete data privacy: prompts and outputs are processed entirely on the local machine and never sent to the cloud. This makes it well suited for sensitive, confidential, or regulated workloads where data must not leave the device.
+
+Foundry Local also enables low-latency inference, since there is no network round-trip involved, and it works fully offline once a model has been downloaded and cached. There are no per-token costs, no API keys required, and no backend infrastructure to maintain.
+
+Foundry Local supports Windows, macOS (including Apple Silicon), and Linux, making it a cross-platform option for building local-first AI applications.

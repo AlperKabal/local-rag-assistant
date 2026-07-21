@@ -1,0 +1,7 @@
+Prompt engineering is the practice of carefully designing the input given to a language model in order to influence the quality and behavior of its output. Even when the underlying model is the same, small changes to how a prompt is written can significantly change how useful or accurate the response is.
+
+Most modern chat-based language models distinguish between a system message and a user message. The system message sets the overall role, tone, and rules the model should follow throughout the conversation, while the user message contains the actual question or request. For example, a system message might instruct the model to act as a technical support assistant and to only answer using information provided in the prompt.
+
+A few common prompt engineering techniques include explicitly telling the model what to do if it does not know the answer, instructing it to cite which source a fact came from, and asking it to keep responses concise. Being explicit about these behaviors in the system message tends to produce more predictable and reliable results than leaving them unstated.
+
+Prompt engineering is especially important in RAG applications, since the model must be guided to rely on the retrieved context rather than falling back on its own general knowledge, which may be outdated or unrelated to the specific documents being used.

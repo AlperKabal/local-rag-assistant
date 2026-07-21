@@ -1,0 +1,7 @@
+Foundry Local includes a curated model catalog containing pre-optimized, open-source models that are ready to run on a wide range of consumer hardware. Rather than offering every possible model, the catalog focuses on models that have been tested and optimized specifically for on-device use.
+
+When a model is requested by its alias, such as qwen2.5-0.5b or phi-3.5-mini, Foundry Local automatically detects the user's hardware and downloads the variant best suited to that machine. Depending on what is available, this could be a version optimized for an NVIDIA GPU using CUDA, an AMD GPU using DirectML, Apple Silicon, a Neural Processing Unit (NPU), or a plain CPU-only build for machines without dedicated AI hardware.
+
+This automatic hardware optimization is powered by ONNX Runtime, which handles model execution and takes advantage of whichever execution provider is available on the device. Because of this, the same application code can run on very different machines without the developer needing to manually manage hardware-specific model variants.
+
+Smaller models, such as those in the 0.5 to 1 billion parameter range, tend to respond faster and use less memory, which makes them a good choice for quick, interactive applications. Larger models, such as those in the 3 to 5 billion parameter range, generally produce higher quality answers but require more memory and take longer to generate a response.

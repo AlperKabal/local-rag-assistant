@@ -1,0 +1,7 @@
+Foundry Local provides native SDKs for several programming languages, including Python, JavaScript, C#, and Rust. This allows developers to integrate local AI inference into a wide range of application types, from Python data pipelines to Node.js backends and .NET desktop applications.
+
+Regardless of which language SDK is used, Foundry Local exposes an OpenAI-compatible API. This means existing code written against the OpenAI Chat Completions API can often be pointed at a local Foundry Local endpoint with only minimal changes, such as updating the base URL.
+
+In addition to the SDKs, Foundry Local ships a command-line interface, commonly referred to as the CLI. The CLI can be used to list available models, download and run a specific model, check the status of the local service, and manage the local model cache. For quick experimentation or debugging, developers can chat with a loaded model directly from the terminal using the CLI's interactive mode.
+
+There is also an optional local web server that exposes the same OpenAI-compatible REST API over HTTP, which is useful when multiple processes or applications need to share a single running model, or when integrating with tools that expect a standard HTTP endpoint.

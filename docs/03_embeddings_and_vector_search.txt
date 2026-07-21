@@ -1,0 +1,7 @@
+Text embeddings are numerical vector representations of text that capture semantic meaning. Two pieces of text that mean similar things will produce embedding vectors that are close together in the vector space, even if they do not share the same exact words. This property is what makes embeddings useful for semantic search.
+
+To perform a semantic search, an embedding model first converts a collection of documents into vectors, which are then stored for later comparison. When a user submits a query, the query itself is also converted into an embedding using the same model. The system then compares the query's vector against the stored document vectors to find the most similar ones.
+
+The most common way to measure similarity between two embedding vectors is cosine similarity, which measures the angle between the vectors rather than their raw distance. A cosine similarity close to 1 means the two pieces of text are very similar in meaning, while a value close to 0 means they are unrelated.
+
+For small collections of documents, it is common to compute cosine similarity against every stored vector in a simple loop, sometimes called a brute-force search. This approach is fast enough for a few thousand vectors, but for very large collections, specialized vector databases or indexing structures are typically used instead to speed up retrieval.

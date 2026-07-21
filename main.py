@@ -37,9 +37,9 @@ async def lifespan(app: FastAPI):
     config = Configuration(app_name="foundry_local_rag")
     FoundryLocalManager.initialize(config)
     manager = FoundryLocalManager.instance
-
+   
     # Load the embedding model
-    embedding_model = manager.catalog.get_model("qwen3-embedding-0.6b")
+    embedding_model = manager.catalog.get_model("qwen3-embedding-8b")
     embedding_model.download(
         lambda p: print(f"\rDownloading embedding model: {p:.1f}%", end="", flush=True)
     )
@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
         all_chunks = load_chunks()
         
     doc_embeddings = [chunk["embedding"] for chunk in all_chunks]
-    print(f"Indexed {len(doc_embeddings)} documents.")
+    print(f"Indexed {len(doc_embeddings)} paragraphs.")
     # Load the chat model
     chat_model = manager.catalog.get_model("phi-3.5-mini")
     chat_model.download(
@@ -128,12 +128,13 @@ def post_message(request: AskRequest):
     except Exception as e:
         print(f"Error answering question: {e}")
         answer = "Sorry, something went wrong while generating an answer. Please try again."
+      
         now_answer = datetime.datetime.now().isoformat()
         with connection: 
-            cursor.execute("""INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?,?,?,?)""",(conversation_id, "error-assistant", answer, now_answer))
+            cursor.execute("""INSERT INTO messages (conversation_id, role, content,  created_at) VALUES (?,?,?,?)""",(conversation_id, "error-assistant", answer, now_answer))
             if was_initialized: 
                 cursor.execute("""DELETE FROM conversations WHERE id = ?""", (conversation_id,))
-                return {"answer": answer, "conversation_id": None, "error": True}
+                return {"answer": answer, "conversation_id": None, "error": True,}
             else:
                 cursor.execute("""UPDATE messages SET role = ? WHERE id = ?""", ("error-user", message_id))
                 return {"answer": answer, "conversation_id": conversation_id, "error": True}
@@ -183,7 +184,7 @@ def get_conversation(conversation_id:int):
     return [{"content": content, "role": role, "created_at": created_at} for role, content, created_at in conversation] 
 
 
-def get_cached_answer(query_embedding, threshold = 0.92):
+def get_cached_answer(query_embedding, threshold = 0.95):
     cursor = connection.cursor()
     with connection:
         rows = cursor.execute("""SELECT question, answer, embedding FROM cache""").fetchall()
@@ -195,6 +196,7 @@ def get_cached_answer(query_embedding, threshold = 0.92):
         if score > best_score:
             best_score = score
             best_answer = cached_answer
+    print(f"Best cache similarity score: {best_score}")
     if best_score > threshold:
         return best_answer
     return None 
@@ -257,7 +259,7 @@ def cosine_similarity(a, b):
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
 
 
-def find_relevant(query_embedding, doc_embeddings, top_k=2):
+def find_relevant(query_embedding, doc_embeddings, top_k=5):
     """Return the indices and scores of the top-k most similar documents."""
     scores = []
     for i, doc_emb in enumerate(doc_embeddings):
@@ -272,23 +274,25 @@ def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunk
     query_embedding = query_response.data[0].embedding
 
     # 2. Check the Semantic Cache
-    cached_answer = get_cached_answer(query_embedding, threshold=0.92)
+    cached_answer = get_cached_answer(query_embedding, threshold=0.95)
     if cached_answer: 
-        print(f"Answer (cached): {cached_answer}\n")
         return cached_answer# Exit the function early since we already answered!
 
     # 3. Retrieve the most relevant documents
-    results = find_relevant(query_embedding, doc_embeddings, top_k=3)
+    results = find_relevant(query_embedding, doc_embeddings, top_k=5)
     context = "\n".join(f"- {all_chunks[i]['text']} (source: {all_chunks[i]['source']})" for i, _ in results)
-
+    print(f"\n--- Retrieved context for '{query}' ---\n{context}\n---\n")
     # 4. Build the prompt
     messages = [
         {
             "role": "system",
-            "content": (
+            "content":  (
                 "You are a strict technical support assistant. "
-                "Answer the user's question using ONLY the facts provided below. "
-                "If the answer cannot be found in the text below, or if the user is greeting you/asking off-topic questions, reply exactly with: 'I am sorry, but I can only answer questions about Foundry Local features based on my documentation.'\n\n"
+                "Carefully check whether the facts below contain information relevant to the user's question. "
+                "If they do, answer the question using only those facts. "
+                "If none of the facts are relevant, or if the user is greeting you or asking something unrelated to Foundry Local, "
+                "respond with exactly this sentence and nothing else: "
+                "\"I am sorry, but I can only answer questions about Foundry Local features based on my documentation.\"\n\n"
                 f"Facts:\n{context}"
             ),
         },
@@ -307,6 +311,7 @@ def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunk
     # 5. Save the new answer to the cache
     save_cached_answer(query, full_answer, query_embedding)
 
+   
     # 6. Return the full_answer
     return full_answer
 
