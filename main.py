@@ -118,13 +118,15 @@ def post_message(request: AskRequest):
         exists = cursor.execute("""SELECT id FROM conversations WHERE id = ?""", (conversation_id,)).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Conversation not found")
-    
+        
+    history = [] if was_initialized else get_conversation_history(conversation_id, 6)
+
     with connection:
         cursor.execute("""INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?,?,?,?)""",(conversation_id, "user", question, now_question))
         message_id = cursor.lastrowid   
      
     try:
-        answer = answer_query(question, embedding_client, chat_client, doc_embeddings, all_chunks)
+        answer = answer_query(question, embedding_client, chat_client, doc_embeddings, all_chunks, history=history)
     except Exception as e:
         print(f"Error answering question: {e}")
         answer = "Sorry, something went wrong while generating an answer. Please try again."
@@ -183,6 +185,12 @@ def get_conversation(conversation_id:int):
         conversation = cursor.execute("""SELECT role, content, created_at FROM messages WHERE conversation_id = ? AND role NOT IN ('error-user', 'error-assistant') ORDER BY created_at ASC""", (conversation_id,)).fetchall()
     return [{"content": content, "role": role, "created_at": created_at} for role, content, created_at in conversation] 
 
+def get_conversation_history(conversation_id, limit=6):
+    cursor = connection.cursor()
+    with connection:
+        rows = cursor.execute("""SELECT role, content FROM messages WHERE conversation_id = ? AND role NOT IN ('error-user', 'error-assistant') ORDER BY created_at DESC LIMIT ?""", (conversation_id,limit)).fetchall()
+        rows.reverse()
+    return [{"role": role, "content": content} for role,content in rows]
 
 def get_cached_answer(query_embedding, threshold = 0.95):
     cursor = connection.cursor()
@@ -266,17 +274,45 @@ def find_relevant(query_embedding, doc_embeddings, top_k=5):
         score = cosine_similarity(query_embedding, doc_emb)
         scores.append((i, score))
     scores.sort(key=lambda x: x[1], reverse=True)
-    return scores[:top_k]    
+    return scores[:top_k]  
 
-def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunks):
+def rewrite_query(question, history, chat_client):
+    if not history:
+        return question  # no history yet, nothing to rewrite against
+
+    rewrite_prompt = [
+        {
+            "role": "system",
+            "content": (
+                "Rewrite the user's latest message into a standalone question that includes "
+                "any context needed to understand it, based on the conversation history below. "
+                "If the message is already a standalone question, return it unchanged. "
+                "Output ONLY the rewritten question, with no explanation or extra text."
+            ),
+        },
+        *history,
+        {"role": "user", "content": question},
+    ]
+
+    response = chat_client.complete_chat(rewrite_prompt)  # non-streaming — just need the final text
+    return response.choices[0].message.content.strip()  
+
+def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunks, history = None):
+    if history is None:
+        history = []
+    retrieval_query = rewrite_query(query, history, chat_client)
+    
     # 1. Embed the query
-    query_response = embedding_client.generate_embedding(query)
+    query_response = embedding_client.generate_embedding(retrieval_query)
     query_embedding = query_response.data[0].embedding
 
+    
+
     # 2. Check the Semantic Cache
-    cached_answer = get_cached_answer(query_embedding, threshold=0.95)
-    if cached_answer: 
-        return cached_answer# Exit the function early since we already answered!
+    if not history:
+        cached_answer = get_cached_answer(query_embedding, threshold=0.95)
+        if cached_answer: 
+            return cached_answer# Exit the function early since we already answered!
 
     # 3. Retrieve the most relevant documents
     results = find_relevant(query_embedding, doc_embeddings, top_k=5)
@@ -295,6 +331,7 @@ def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunk
                 f"Facts:\n{context}"
             ),
         },
+        *history,
         {"role": "user", "content": query},
     ]
 
@@ -308,7 +345,8 @@ def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunk
                 full_answer += content
     
     # 5. Save the new answer to the cache
-    save_cached_answer(query, full_answer, query_embedding)
+    if not history:
+        save_cached_answer(retrieval_query, full_answer, query_embedding)
 
    
     # 6. Return the full_answer
