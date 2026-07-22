@@ -281,7 +281,6 @@ def answer_query(query, embedding_client, chat_client, doc_embeddings, all_chunk
     # 3. Retrieve the most relevant documents
     results = find_relevant(query_embedding, doc_embeddings, top_k=5)
     context = "\n".join(f"- {all_chunks[i]['text']} (source: {all_chunks[i]['source']})" for i, _ in results)
-    print(f"\n--- Retrieved context for '{query}' ---\n{context}\n---\n")
     # 4. Build the prompt
     messages = [
         {

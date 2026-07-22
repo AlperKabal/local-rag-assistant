@@ -44,7 +44,7 @@ function Sidebar({
         </button>
         <button
           onClick={onToggleSidebar}
-          className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-gray-200 shrink-0"
+          className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-blue-300 shrink-0"
         >
           <span className="text-sm">←</span>
         </button>
